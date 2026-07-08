@@ -52,10 +52,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Sta -File .\QuickChecks.ps1
 Press <kbd>Win</kbd>+<kbd>R</kbd>, paste, and hit Enter:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Sta -Command "irm https://raw.githubusercontent.com/joelskerman/quick-checks/main/QuickChecks.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Sta -Command "irm https://raw.githubusercontent.com/skermiebrotech/quick-checks/main/QuickChecks.ps1 | iex"
 ```
 
-> If you fork this repository, replace `joelskerman` with your own GitHub username.
+> If you fork this repository, replace `skermiebrotech` with your own GitHub username.
 
 ### Build a standalone EXE (optional)
 
