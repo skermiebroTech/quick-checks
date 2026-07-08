@@ -664,8 +664,24 @@ function New-KeyboardTesterForm {
     $form.Controls.Add($script:FocusLabel)
 
     $script:KeyMap       = @{}   # [int]Keys value -> ArrayList of key labels
+    $script:PressedKeys  = @{}   # side-specific key values currently held down
     $script:KeyFont      = New-Object System.Drawing.Font('Segoe UI', 9)
     $script:KeyFontSmall = New-Object System.Drawing.Font('Segoe UI', 7.5)
+
+    # WinForms reports Shift/Ctrl/Alt with the generic key code regardless of
+    # side. Map each generic code to its [left, right] virtual-key codes so we
+    # can probe GetKeyState and highlight the correct physical key.
+    $script:ModifierSides = @{
+        [int][System.Windows.Forms.Keys]::ShiftKey   = @(0xA0, 0xA1)  # L/R Shift
+        [int][System.Windows.Forms.Keys]::ControlKey = @(0xA2, 0xA3)  # L/R Ctrl
+        [int][System.Windows.Forms.Keys]::Menu       = @(0xA4, 0xA5)  # L/R Alt
+    }
+    # Is a virtual key currently down? Defaults to "yes" if GetKeyState is
+    # unavailable, so the key still lights up rather than being missed.
+    $script:IsVkDown = {
+        param($vk)
+        try { ([QCK.Native]::GetKeyState($vk) -band 0x8000) -ne 0 } catch { $true }
+    }
 
     function AddKey([string]$Label, [string]$KeyName, [double]$X, [double]$Y, [double]$W) {
         $lbl = New-Object System.Windows.Forms.Label
@@ -729,16 +745,54 @@ function New-KeyboardTesterForm {
         $e.Handled = $true
         $e.SuppressKeyPress = $true
         $keyValue = [int]$e.KeyCode
-        if ($script:KeyMap.ContainsKey($keyValue)) {
-            foreach ($k in $script:KeyMap[$keyValue]) { Update-KeyVisual -Control $k -State Pressed }
+
+        # For Shift/Ctrl/Alt, resolve which physical side(s) are actually down;
+        # for everything else the reported key code is already specific.
+        $targets = @()
+        if ($script:ModifierSides.ContainsKey($keyValue)) {
+            foreach ($side in $script:ModifierSides[$keyValue]) {
+                if (& $script:IsVkDown $side) { $targets += $side }
+            }
+            if ($targets.Count -eq 0) { $targets = $script:ModifierSides[$keyValue] }
+        } else {
+            $targets = @($keyValue)
+        }
+
+        foreach ($t in $targets) {
+            $script:PressedKeys[$t] = $true
+            if ($script:KeyMap.ContainsKey($t)) {
+                foreach ($k in $script:KeyMap[$t]) { Update-KeyVisual -Control $k -State Pressed }
+            }
         }
         $script:LastKeyLabel.Text = 'Last key pressed: ' + $e.KeyCode.ToString()
     })
     $form.Add_KeyUp({
         param($sender, $e)
         $keyValue = [int]$e.KeyCode
-        if ($script:KeyMap.ContainsKey($keyValue)) {
-            foreach ($k in $script:KeyMap[$keyValue]) { Update-KeyVisual -Control $k -State Released }
+
+        # The released modifier side now reads up; only act on sides we had
+        # actually marked as pressed so untouched keys never turn green.
+        $targets = @()
+        if ($script:ModifierSides.ContainsKey($keyValue)) {
+            foreach ($side in $script:ModifierSides[$keyValue]) {
+                if ($script:PressedKeys.ContainsKey($side) -and -not (& $script:IsVkDown $side)) {
+                    $targets += $side
+                }
+            }
+            if ($targets.Count -eq 0) {
+                foreach ($side in $script:ModifierSides[$keyValue]) {
+                    if ($script:PressedKeys.ContainsKey($side)) { $targets += $side }
+                }
+            }
+        } else {
+            $targets = @($keyValue)
+        }
+
+        foreach ($t in $targets) {
+            [void]$script:PressedKeys.Remove($t)
+            if ($script:KeyMap.ContainsKey($t)) {
+                foreach ($k in $script:KeyMap[$t]) { Update-KeyVisual -Control $k -State Released }
+            }
         }
     })
 
@@ -793,6 +847,13 @@ function Start-KeyboardTester {
 try {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    # GetKeyState lets us tell left vs right for Shift/Ctrl/Alt, which the
+    # WinForms KeyDown/KeyUp events themselves report only as the generic key.
+    try {
+        Add-Type -Namespace QCK -Name Native -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern short GetKeyState(int nVirtKey);
+"@ -ErrorAction Stop
+    } catch { }
     $form = New-KeyboardTesterForm
     [System.Windows.Forms.Application]::Run($form)
 } catch { }
