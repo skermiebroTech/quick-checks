@@ -1,0 +1,21 @@
+# Build output
+*.exe
+*.msi
+*.zip
+
+# ps2exe artifacts
+*.exe.config
+
+# Logs / transcripts
+*.log
+PowerShell_transcript.*
+
+# OS cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
