@@ -894,11 +894,18 @@ function New-InfoLabel {
 }
 
 try {
-    $script:SystemInfo     = Get-SystemInformation
-    $script:HealthInfo     = Get-BatteryHealth
-    $script:HealthAttempts = 1
-    $script:HealthRetry    = 15
-    $script:AppIcon     = New-AppIcon
+    # Placeholder system info so the window can be built and shown instantly;
+    # the real (WMI-backed) values are loaded right after Show() below, and
+    # battery health is looked up lazily by Update-MainUI's retry logic.
+    $script:SystemInfo = [pscustomobject]@{
+        Model = 'Loading...'; Manufacturer = 'Loading...'; Serial = 'Loading...'
+        ComputerName = $env:COMPUTERNAME
+        Cpu = 'Loading...'; Ram = 'Loading...'; Gpu = 'Loading...'; Screen = 'Loading...'
+    }
+    $script:HealthInfo     = $null
+    $script:HealthAttempts = 0
+    $script:HealthRetry    = 2   # skip the pre-Run Update-MainUI tick; catch it on the first DataTimer tick
+    $script:AppIcon        = New-AppIcon
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text            = 'quick-checks'
@@ -955,13 +962,18 @@ try {
     # Long values (CPU/GPU names, multi-monitor lists) get ellipsised by the
     # labels; the full text stays readable via a hover tooltip.
     $tips = New-Object System.Windows.Forms.ToolTip
-    foreach ($lbl in @($lblModel, $lblCpu, $lblRam, $lblGpu, $lblScreen)) {
-        $tips.SetToolTip($lbl, $lbl.Text)
-    }
     $script:UI = @{
-        Battery = $lblBattery
-        Health  = $lblHealth
-        Status  = $status
+        Battery      = $lblBattery
+        Health       = $lblHealth
+        Status       = $status
+        Model        = $lblModel
+        Manufacturer = $lblManufacturer
+        Serial       = $lblSerial
+        Screen       = $lblScreen
+        Cpu          = $lblCpu
+        Ram          = $lblRam
+        Gpu          = $lblGpu
+        Tips         = $tips
     }
 
     # Keyboard tester launcher.
@@ -996,6 +1008,26 @@ try {
     $script:AnimTimer = New-Object System.Windows.Forms.Timer
     $script:AnimTimer.Interval = 33   # ~30 FPS
     $script:AnimTimer.Add_Tick({ Step-Animation })
+
+    # Show the window right away - don't make the user wait on WMI queries.
+    $form.Show()
+    $form.Refresh()
+
+    # Now load the real (slower) system info and fill in the labels.
+    try {
+        $script:SystemInfo = Get-SystemInformation
+        $ui = $script:UI
+        $ui.Model.Text        = 'Model: '        + $script:SystemInfo.Model
+        $ui.Manufacturer.Text = 'Manufacturer: ' + $script:SystemInfo.Manufacturer
+        $ui.Serial.Text       = 'Serial: '       + $script:SystemInfo.Serial
+        $ui.Screen.Text       = 'Screen: '       + $script:SystemInfo.Screen
+        $ui.Cpu.Text          = 'CPU: '          + $script:SystemInfo.Cpu
+        $ui.Ram.Text          = 'RAM: '          + $script:SystemInfo.Ram
+        $ui.Gpu.Text          = 'GPU: '          + $script:SystemInfo.Gpu
+        foreach ($lbl in @($ui.Model, $ui.Cpu, $ui.Ram, $ui.Gpu, $ui.Screen)) {
+            $ui.Tips.SetToolTip($lbl, $lbl.Text)
+        }
+    } catch { }
 
     Update-MainUI
     [System.Windows.Forms.Application]::Run($form)
