@@ -39,20 +39,17 @@ Add-Type -AssemblyName System.Drawing
 try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
 try { [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false) } catch { }
 
-# If we own our console window (launched via Win+R / double-click rather than
-# from an interactive terminal), hide it so only the GUI shows.
+# Hide the console window so only the GUI is visible. This is a GUI app, not a
+# console app. If the user launched it from an interactive terminal on purpose,
+# they can unhide it from the taskbar if needed.
 try {
     Add-Type -Namespace QuickChecks -Name Native -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
 [DllImport("user32.dll")]  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 '@ -ErrorAction Stop
     $consoleHwnd = [QuickChecks.Native]::GetConsoleWindow()
     if ($consoleHwnd -ne [IntPtr]::Zero) {
-        $procList = New-Object 'uint[]' 4
-        if ([QuickChecks.Native]::GetConsoleProcessList($procList, 4) -eq 1) {
-            [void][QuickChecks.Native]::ShowWindow($consoleHwnd, 0)   # SW_HIDE
-        }
+        [void][QuickChecks.Native]::ShowWindow($consoleHwnd, 0)   # SW_HIDE
     }
 } catch { }
 
