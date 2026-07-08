@@ -697,10 +697,10 @@ function New-KeyboardTesterForm {
            'O','O',1,'P','P',1,'[','OemOpenBrackets',1,']','OemCloseBrackets',1,'\','Oem5',1.5)
         ,@('Caps','CapsLock',1.75, 'A','A',1,'S','S',1,'D','D',1,'F','F',1,'G','G',1,'H','H',1,'J','J',1,
            'K','K',1,'L','L',1,';','OemSemicolon',1,"'",'OemQuotes',1,'Enter','Return',2.25)
-        ,@('Shift','ShiftKey',2.25, 'Z','Z',1,'X','X',1,'C','C',1,'V','V',1,'B','B',1,'N','N',1,'M','M',1,
-           ',','Oemcomma',1,'.','OemPeriod',1,'/','OemQuestion',1,'Shift','ShiftKey',2.75)
-        ,@('Ctrl','ControlKey',1.5, 'Win','LWin',1.25, 'Alt','Menu',1.5, 'Space','Space',6.5,
-           'Alt','Menu',1.5, 'Win','RWin',1.25, 'Ctrl','ControlKey',1.5)
+        ,@('LShift','LShiftKey',2.25, 'Z','Z',1,'X','X',1,'C','C',1,'V','V',1,'B','B',1,'N','N',1,'M','M',1,
+           ',','Oemcomma',1,'.','OemPeriod',1,'/','OemQuestion',1,'RShift','RShiftKey',2.75)
+        ,@('LCtrl','LControlKey',1.5, 'Win','LWin',1.25, 'LAlt','LMenu',1.5, 'Space','Space',6.5,
+           'RAlt','RMenu',1.5, 'Win','RWin',1.25, 'RCtrl','RControlKey',1.5)
     )
     $y = [double]$oy
     foreach ($row in $rows) {
