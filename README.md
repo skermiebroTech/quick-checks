@@ -70,6 +70,17 @@ Install-Module ps2exe -Scope CurrentUser
 Invoke-ps2exe .\QuickChecks.ps1 .\QuickChecks.exe -noConsole -STA -title 'quick-checks' -product 'quick-checks'
 ```
 
+### Launch during Windows OOBE (refurb/repair techs)
+
+[`payloads/oobe-launch.txt`](payloads/oobe-launch.txt) is a [DuckyScript](https://docs.hak5.org/hak5-usb-rubber-ducky)
+payload for a USB Rubber Ducky / Flipper Zero. When run at the Windows 10/11 out-of-box-experience
+setup screens, it opens the hidden command prompt with <kbd>Shift</kbd>+<kbd>F10</kbd> and streams
+quick-checks from GitHub — handy for testing a machine's battery and keyboard before finishing setup.
+
+Encode it with the Hak5 Duck Encoder (or drop it on a Flipper Zero as BadUSB). It assumes a US
+keyboard layout and a working internet connection, and is meant for hardware **you own or are
+authorised to service**.
+
 ## Privacy
 
 The keyboard tester **does not log, save, or transmit keystrokes**. It uses ordinary WinForms

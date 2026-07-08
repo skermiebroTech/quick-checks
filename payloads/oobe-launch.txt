@@ -1,0 +1,31 @@
+REM ============================================================
+REM  quick-checks - OOBE auto-launcher (DuckyScript 1.0)
+REM ------------------------------------------------------------
+REM  Purpose : During the Windows 10/11 OOBE (first-boot setup
+REM            screens), open the hidden command prompt with
+REM            Shift+F10 and launch the quick-checks battery and
+REM            keyboard diagnostic tool straight from GitHub.
+REM
+REM  Use     : Intended for PC refurbishers / repair techs who
+REM            want to run hardware diagnostics on their OWN
+REM            machines before completing Windows setup. Only run
+REM            this on hardware you are authorised to service.
+REM
+REM  Notes   : - Assumes a US (en-US) keyboard layout on target.
+REM            - The machine needs working internet (the script
+REM              is streamed from GitHub with irm | iex).
+REM            - Bump the DELAY values up on slow hardware.
+REM  Compile : Encode with the Hak5 Duck Encoder, or run directly
+REM            on a Flipper Zero / other BadUSB device.
+REM ============================================================
+
+REM Let the OOBE screen settle and the USB device enumerate.
+DELAY 3000
+
+REM Open the hidden OOBE command prompt (runs as SYSTEM).
+SHIFT F10
+DELAY 2000
+
+REM Stream and run quick-checks in an STA PowerShell session.
+STRING powershell -NoProfile -ExecutionPolicy Bypass -Sta -Command "irm https://raw.githubusercontent.com/skermiebrotech/quick-checks/main/QuickChecks.ps1 | iex"
+ENTER
