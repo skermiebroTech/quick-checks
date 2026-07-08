@@ -92,14 +92,19 @@ $script:HealthRetry = 0
 # --------------------------------------------------------------------------
 
 function Get-SystemInformation {
-    # Static machine identity. Every query is fenced so a missing WMI class or
-    # denied permission just leaves the field as 'Unknown'.
+    # Static machine identity + hardware inventory. Every query is fenced so a
+    # missing WMI class or denied permission just leaves the field as 'Unknown'.
     $info = [ordered]@{
         Model        = 'Unknown'
         Manufacturer = 'Unknown'
         Serial       = 'Unknown'
         ComputerName = $env:COMPUTERNAME
+        Cpu          = 'Unknown'
+        Ram          = 'Unknown'
+        Gpu          = 'Unknown'
+        Screen       = 'Unknown'
     }
+    $cs = $null
     try {
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
         if ($cs) {
@@ -111,6 +116,57 @@ function Get-SystemInformation {
         $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop
         if ($bios -and $bios.SerialNumber) { $info.Serial = ([string]$bios.SerialNumber).Trim() }
     } catch { }
+
+    # CPU: cleaned-up name, core/thread count, rated clock.
+    try {
+        $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($cpu -and $cpu.Name) {
+            $name = ((([string]$cpu.Name) -replace '\(R\)|\(TM\)', '') -split '@')[0] -replace '\s+', ' '
+            $clock = ''
+            if ($cpu.MaxClockSpeed -gt 0) { $clock = ' @ {0:N1} GHz' -f ($cpu.MaxClockSpeed / 1000.0) }
+            $info.Cpu = '{0} ({1}C/{2}T){3}' -f $name.Trim(), $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors, $clock
+        }
+    } catch { }
+
+    # RAM: total capacity, configured speed and module count. Falls back to
+    # the OS-visible total when the DIMM class is unavailable.
+    try {
+        $dimms = @(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop)
+        if ($dimms.Count -gt 0) {
+            $totalGB = [math]::Round((($dimms | Measure-Object -Property Capacity -Sum).Sum) / 1GB)
+            $speed = $dimms | ForEach-Object {
+                if ($_.ConfiguredClockSpeed -gt 0) { $_.ConfiguredClockSpeed }
+                elseif ($_.Speed -gt 0)            { $_.Speed }
+            } | Select-Object -First 1
+            if ($speed) { $info.Ram = '{0} GB @ {1} MHz, {2} module(s)' -f $totalGB, $speed, $dimms.Count }
+            else        { $info.Ram = '{0} GB, {1} module(s)' -f $totalGB, $dimms.Count }
+        } elseif ($cs -and $cs.TotalPhysicalMemory) {
+            $info.Ram = '{0} GB' -f [math]::Round($cs.TotalPhysicalMemory / 1GB)
+        }
+    } catch {
+        if ($cs -and $cs.TotalPhysicalMemory) { $info.Ram = '{0} GB' -f [math]::Round($cs.TotalPhysicalMemory / 1GB) }
+    }
+
+    # GPUs: every video controller, plus the native resolution(s) they report.
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name })
+        if ($gpus.Count -gt 0) {
+            $info.Gpu = ($gpus | ForEach-Object { ([string]$_.Name).Trim() }) -join '  +  '
+            $res = @($gpus | Where-Object { $_.CurrentHorizontalResolution -gt 0 } |
+                ForEach-Object { '{0}x{1}' -f $_.CurrentHorizontalResolution, $_.CurrentVerticalResolution } |
+                Select-Object -Unique)
+            if ($res.Count -gt 0) { $info.Screen = $res -join ', ' }
+        }
+    } catch { }
+
+    # Fallback resolution from WinForms if the video driver didn't report one.
+    if ($info.Screen -eq 'Unknown') {
+        try {
+            $info.Screen = ([System.Windows.Forms.Screen]::AllScreens |
+                ForEach-Object { '{0}x{1}' -f $_.Bounds.Width, $_.Bounds.Height }) -join ', '
+        } catch { }
+    }
+
     [pscustomobject]$info
 }
 
@@ -161,8 +217,10 @@ function Get-BatteryInformation {
 }
 
 function Get-BatteryHealth {
-    # Health = FullChargeCapacity / DesignedCapacity * 100, from root\wmi.
-    # Returns $null when the firmware/driver does not report capacity data.
+    # Health = FullChargeCapacity / DesignedCapacity * 100.
+    # Primary source: the root\wmi battery classes. Many machines don't expose
+    # those, so fall back to parsing "powercfg /batteryreport /xml", which
+    # reads the same firmware data and needs no admin rights.
     try {
         $full   = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryFullChargedCapacity -ErrorAction Stop | Select-Object -First 1
         $static = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryStaticData -ErrorAction Stop | Select-Object -First 1
@@ -172,6 +230,33 @@ function Get-BatteryHealth {
                 DesignedCapacity   = [uint32]$static.DesignedCapacity
                 FullChargeCapacity = [uint32]$full.FullChargedCapacity
                 HealthPercent      = [int][math]::Min(100, $health)
+            }
+        }
+    } catch { }
+
+    # Fallback: powercfg battery report (exits non-zero on desktops, so this
+    # is harmless on machines without a battery).
+    try {
+        $xmlPath = Join-Path ([System.IO.Path]::GetTempPath()) 'quick-checks-batteryreport.xml'
+        $proc = Start-Process -FilePath 'powercfg.exe' `
+            -ArgumentList '/batteryreport', '/xml', '/output', "`"$xmlPath`"" `
+            -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+        if ($proc.ExitCode -eq 0 -and (Test-Path -LiteralPath $xmlPath)) {
+            $raw = Get-Content -LiteralPath $xmlPath -Raw
+            Remove-Item -LiteralPath $xmlPath -Force -ErrorAction SilentlyContinue
+            $report = [xml]$raw
+            foreach ($bat in @($report.BatteryReport.Batteries.Battery)) {
+                if (-not $bat) { continue }
+                $design = 0.0; $fullCap = 0.0
+                [void][double]::TryParse([string]$bat.DesignCapacity, [ref]$design)
+                [void][double]::TryParse([string]$bat.FullChargeCapacity, [ref]$fullCap)
+                if ($design -gt 0 -and $fullCap -gt 0) {
+                    return [pscustomobject]@{
+                        DesignedCapacity   = [uint32]$design
+                        FullChargeCapacity = [uint32]$fullCap
+                        HealthPercent      = [int][math]::Min(100, [math]::Round(($fullCap / $design) * 100))
+                    }
+                }
             }
         }
     } catch { }
@@ -417,11 +502,13 @@ function Update-MainUI {
     $s.RemainingMins = $battery.RemainingMins
 
     # Battery health is effectively static; if it was unavailable at startup,
-    # retry occasionally (every ~30 s) in case the driver comes back.
-    if (-not $script:HealthInfo) {
+    # retry a few times (every ~30 s) in case the driver needed time to settle.
+    # Capped because the powercfg fallback spawns a process per attempt.
+    if (-not $script:HealthInfo -and $s.HasBattery -and $script:HealthAttempts -lt 4) {
         $script:HealthRetry--
         if ($script:HealthRetry -le 0) {
             $script:HealthInfo  = Get-BatteryHealth
+            $script:HealthAttempts++
             $script:HealthRetry = 15
         }
     }
@@ -810,14 +897,15 @@ function New-InfoLabel {
 }
 
 try {
-    $script:SystemInfo  = Get-SystemInformation
-    $script:HealthInfo  = Get-BatteryHealth
-    $script:HealthRetry = 15
+    $script:SystemInfo     = Get-SystemInformation
+    $script:HealthInfo     = Get-BatteryHealth
+    $script:HealthAttempts = 1
+    $script:HealthRetry    = 15
     $script:AppIcon     = New-AppIcon
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text            = 'quick-checks'
-    $form.Size            = New-Object System.Drawing.Size(600, 420)
+    $form.Size            = New-Object System.Drawing.Size(600, 470)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
     $form.MaximizeBox     = $false
     $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -851,16 +939,27 @@ try {
     $status.Text      = 'Reading battery information...'
     $form.Controls.Add($status)
 
-    # System / battery info, two columns.
+    # System / battery info, two columns of five rows.
     $colW = 262
-    $lblModel        = New-InfoLabel ('Model: '        + $script:SystemInfo.Model)        24 248 $colW
-    $lblManufacturer = New-InfoLabel ('Manufacturer: ' + $script:SystemInfo.Manufacturer) 24 272 $colW
-    $lblSerial       = New-InfoLabel ('Serial: '       + $script:SystemInfo.Serial)       24 296 $colW
-    $lblComputer     = New-InfoLabel ('Computer: '     + $script:SystemInfo.ComputerName) 306 248 $colW
-    $lblBattery      = New-InfoLabel 'Battery: --'  306 272 $colW
-    $lblHealth       = New-InfoLabel 'Health: --'   306 296 $colW
-    foreach ($lbl in @($lblModel, $lblManufacturer, $lblSerial, $lblComputer, $lblBattery, $lblHealth)) {
+    $lblModel        = New-InfoLabel ('Model: '        + $script:SystemInfo.Model)        24 246 $colW
+    $lblManufacturer = New-InfoLabel ('Manufacturer: ' + $script:SystemInfo.Manufacturer) 24 270 $colW
+    $lblSerial       = New-InfoLabel ('Serial: '       + $script:SystemInfo.Serial)       24 294 $colW
+    $lblComputer     = New-InfoLabel ('Computer: '     + $script:SystemInfo.ComputerName) 24 318 $colW
+    $lblScreen       = New-InfoLabel ('Screen: '       + $script:SystemInfo.Screen)       24 342 $colW
+    $lblCpu          = New-InfoLabel ('CPU: '          + $script:SystemInfo.Cpu)          306 246 $colW
+    $lblRam          = New-InfoLabel ('RAM: '          + $script:SystemInfo.Ram)          306 270 $colW
+    $lblGpu          = New-InfoLabel ('GPU: '          + $script:SystemInfo.Gpu)          306 294 $colW
+    $lblBattery      = New-InfoLabel 'Battery: --'  306 318 $colW
+    $lblHealth       = New-InfoLabel 'Health: --'   306 342 $colW
+    foreach ($lbl in @($lblModel, $lblManufacturer, $lblSerial, $lblComputer, $lblScreen,
+                       $lblCpu, $lblRam, $lblGpu, $lblBattery, $lblHealth)) {
         $form.Controls.Add($lbl)
+    }
+    # Long values (CPU/GPU names, multi-monitor lists) get ellipsised by the
+    # labels; the full text stays readable via a hover tooltip.
+    $tips = New-Object System.Windows.Forms.ToolTip
+    foreach ($lbl in @($lblModel, $lblCpu, $lblRam, $lblGpu, $lblScreen)) {
+        $tips.SetToolTip($lbl, $lbl.Text)
     }
     $script:UI = @{
         Battery = $lblBattery
@@ -871,7 +970,7 @@ try {
     # Keyboard tester launcher.
     $button = New-Object System.Windows.Forms.Button
     $button.Text = 'Open Keyboard Tester'
-    $button.SetBounds([int](($form.ClientSize.Width - 190) / 2), 330, 190, 34)
+    $button.SetBounds([int](($form.ClientSize.Width - 190) / 2), 378, 190, 34)
     $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $button.FlatAppearance.BorderColor = $script:Theme.Accent
     $button.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 54)

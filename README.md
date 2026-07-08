@@ -18,9 +18,12 @@ graphical keyboard tester that runs on its own thread so it never blocks the mai
   - Animated lightning bolt + moving shine effect while on AC power (~30 FPS)
   - Slow pulse when the battery is at 0–20%, subtle green glow at 81–100%
   - "Fully Charged" indicator at 100%
-- **System info at a glance** — model, manufacturer, serial number, computer name
+- **Full system info at a glance** — model, manufacturer, serial number, computer name,
+  CPU (name, cores/threads, clock), RAM capacity and speed, every GPU, and screen resolution(s)
 - **Battery health** — `FullChargeCapacity / DesignedCapacity × 100`, read from WMI
-  (`root\wmi`); shows `Health: Unknown` gracefully when the firmware doesn't report it
+  (`root\wmi`) with an automatic `powercfg /batteryreport` fallback for machines whose
+  drivers don't expose the WMI battery classes; shows `Health: Unknown` only when neither
+  source reports capacity data
 - **Keyboard tester** — a full visual QWERTY layout (function keys, number row, modifiers,
   arrows, navigation cluster). Keys light up while held and turn green once tested. Runs in a
   separate STA PowerShell runspace, so it stays responsive while the battery display updates
