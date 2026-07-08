@@ -41,6 +41,15 @@ graphical keyboard tester that runs on its own thread so it never blocks the mai
 - No third-party modules — only built-in .NET (WinForms, System.Drawing) and WMI/CIM
 
 ## Run it
+
+### From PowerShell
+
+```powershell
+git clone https://github.com/skermiebrotech/quick-checks.git
+cd quick-checks
+powershell -NoProfile -ExecutionPolicy Bypass -Sta -File .\QuickChecks.ps1
+```
+
 ### From Win+R (no download needed)
 
 Press <kbd>Win</kbd>+<kbd>R</kbd>, paste, and hit Enter:
