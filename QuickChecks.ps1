@@ -100,6 +100,7 @@ function Get-SystemInformation {
         Ram          = 'Unknown'
         Gpu          = 'Unknown'
         Screen       = 'Unknown'
+        Disk         = 'Unknown'
     }
     $cs = $null
     try {
@@ -163,6 +164,27 @@ function Get-SystemInformation {
                 ForEach-Object { '{0}x{1}' -f $_.Bounds.Width, $_.Bounds.Height }) -join ', '
         } catch { }
     }
+
+    # Physical disks: model + total capacity per drive. Free space is summed
+    # from the fixed logical volumes that live on those disks.
+    try {
+        $drives = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop |
+            Where-Object { $_.Size -gt 0 })
+        if ($drives.Count -gt 0) {
+            $info.Disk = ($drives | ForEach-Object {
+                $model = if ($_.Model) { ([string]$_.Model).Trim() } else { 'Disk' }
+                '{0} ({1} GB)' -f $model, [math]::Round($_.Size / 1GB)
+            }) -join '  +  '
+
+            $vols = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType = 3' -ErrorAction Stop |
+                Where-Object { $_.Size -gt 0 })
+            if ($vols.Count -gt 0) {
+                $freeGB  = [math]::Round((($vols | Measure-Object -Property FreeSpace -Sum).Sum) / 1GB)
+                $totalGB = [math]::Round((($vols | Measure-Object -Property Size      -Sum).Sum) / 1GB)
+                $info.Disk += '  -  {0} GB free of {1} GB' -f $freeGB, $totalGB
+            }
+        }
+    } catch { }
 
     [pscustomobject]$info
 }
@@ -941,6 +963,33 @@ function Cleanup-App {
 }
 
 # --------------------------------------------------------------------------
+# Shutdown
+# --------------------------------------------------------------------------
+
+function Invoke-SystemShutdown {
+    # Confirm before doing something irreversible, then ask Windows to shut
+    # down. The GUI tears itself down first so the tray icon doesn't linger.
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "Shut down this computer now?`n`nSave any open work first - this will close all programs.",
+        'quick-checks - Shut Down',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    try {
+        Start-Process -FilePath 'shutdown.exe' -ArgumentList '/s', '/t', '0' -WindowStyle Hidden -ErrorAction Stop
+        Cleanup-App
+        try { $script:MainForm.Close() } catch { }
+    } catch {
+        try {
+            [void][System.Windows.Forms.MessageBox]::Show(
+                "Could not initiate shutdown.`n$($_.Exception.Message)",
+                'quick-checks', 'OK', 'Error')
+        } catch { }
+    }
+}
+
+# --------------------------------------------------------------------------
 # Main window
 # --------------------------------------------------------------------------
 
@@ -962,6 +1011,7 @@ try {
         Model = 'Loading...'; Manufacturer = 'Loading...'; Serial = 'Loading...'
         ComputerName = $env:COMPUTERNAME
         Cpu = 'Loading...'; Ram = 'Loading...'; Gpu = 'Loading...'; Screen = 'Loading...'
+        Disk = 'Loading...'
     }
     $script:HealthInfo     = $null
     $script:HealthAttempts = 0
@@ -970,7 +1020,7 @@ try {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text            = 'quick-checks'
-    $form.Size            = New-Object System.Drawing.Size(600, 470)
+    $form.Size            = New-Object System.Drawing.Size(600, 520)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
     $form.MaximizeBox     = $false
     $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1016,8 +1066,10 @@ try {
     $lblGpu          = New-InfoLabel ('GPU: '          + $script:SystemInfo.Gpu)          306 294 $colW
     $lblBattery      = New-InfoLabel 'Battery: --'  306 318 $colW
     $lblHealth       = New-InfoLabel 'Health: --'   306 342 $colW
+    # Storage spans the full width - drive names plus free/total can be long.
+    $lblDisk         = New-InfoLabel ('Storage: ' + $script:SystemInfo.Disk) 24 366 ($form.ClientSize.Width - 48)
     foreach ($lbl in @($lblModel, $lblManufacturer, $lblSerial, $lblComputer, $lblScreen,
-                       $lblCpu, $lblRam, $lblGpu, $lblBattery, $lblHealth)) {
+                       $lblCpu, $lblRam, $lblGpu, $lblBattery, $lblHealth, $lblDisk)) {
         $form.Controls.Add($lbl)
     }
     # Long values (CPU/GPU names, multi-monitor lists) get ellipsised by the
@@ -1034,19 +1086,36 @@ try {
         Cpu          = $lblCpu
         Ram          = $lblRam
         Gpu          = $lblGpu
+        Disk         = $lblDisk
         Tips         = $tips
     }
 
-    # Keyboard tester launcher.
+    # Action buttons: keyboard tester (left) and shut down (right), centred as
+    # a pair below the info grid.
+    $btnW = 190; $btnH = 34; $btnGap = 20; $btnY = 406
+    $btnX = [int](($form.ClientSize.Width - (2 * $btnW + $btnGap)) / 2)
+
     $button = New-Object System.Windows.Forms.Button
     $button.Text = 'Open Keyboard Tester'
-    $button.SetBounds([int](($form.ClientSize.Width - 190) / 2), 378, 190, 34)
+    $button.SetBounds($btnX, $btnY, $btnW, $btnH)
     $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $button.FlatAppearance.BorderColor = $script:Theme.Accent
     $button.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 54)
     $button.ForeColor = $script:Theme.Text
     $button.Add_Click({ Start-KeyboardTester })
     $form.Controls.Add($button)
+
+    # Shutdown button - red, and asks for confirmation before acting.
+    $shutdownBtn = New-Object System.Windows.Forms.Button
+    $shutdownBtn.Text = 'Shut Down'
+    $shutdownBtn.SetBounds($btnX + $btnW + $btnGap, $btnY, $btnW, $btnH)
+    $shutdownBtn.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $shutdownBtn.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(255, 120, 110)
+    $shutdownBtn.BackColor = $script:Theme.Red
+    $shutdownBtn.ForeColor = [System.Drawing.Color]::White
+    $shutdownBtn.Font      = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+    $shutdownBtn.Add_Click({ Invoke-SystemShutdown })
+    $form.Controls.Add($shutdownBtn)
 
     # Minimise -> system tray.
     $form.Add_Resize({
@@ -1085,7 +1154,8 @@ try {
         $ui.Cpu.Text          = 'CPU: '          + $script:SystemInfo.Cpu
         $ui.Ram.Text          = 'RAM: '          + $script:SystemInfo.Ram
         $ui.Gpu.Text          = 'GPU: '          + $script:SystemInfo.Gpu
-        foreach ($lbl in @($ui.Model, $ui.Cpu, $ui.Ram, $ui.Gpu, $ui.Screen)) {
+        $ui.Disk.Text         = 'Storage: '      + $script:SystemInfo.Disk
+        foreach ($lbl in @($ui.Model, $ui.Cpu, $ui.Ram, $ui.Gpu, $ui.Screen, $ui.Disk)) {
             $ui.Tips.SetToolTip($lbl, $lbl.Text)
         }
     } catch { }
