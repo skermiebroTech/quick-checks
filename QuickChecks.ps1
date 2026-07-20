@@ -540,8 +540,12 @@ function Update-MainUI {
         if ($script:HealthInfo) {
             $ui.Health.Text = 'Health: {0}%  ({1:N0} / {2:N0} mWh)' -f `
                 $script:HealthInfo.HealthPercent, $script:HealthInfo.FullChargeCapacity, $script:HealthInfo.DesignedCapacity
+            # Colour the readout on the same red->yellow->green scale the
+            # battery graphic uses for its charge fill.
+            $ui.Health.ForeColor = Get-BatteryFillColor -Percent $script:HealthInfo.HealthPercent
         } else {
             $ui.Health.Text = 'Health: Unknown'
+            $ui.Health.ForeColor = $script:Theme.SubText
         }
 
         # Status line under the battery graphic.
@@ -1031,8 +1035,10 @@ try {
     $script:MainForm = $form
 
     # Battery drawing surface (double-buffered to avoid flicker at 30 FPS).
+    # Occupies the right side of the top area; the identity labels sit to its
+    # left. Draw-Battery centres the graphic within whatever width it's given.
     $panel = New-Object System.Windows.Forms.Panel
-    $panel.SetBounds(0, 0, $form.ClientSize.Width, 208)
+    $panel.SetBounds(250, 0, $form.ClientSize.Width - 250, 208)
     $panel.BackColor = $script:Theme.Back
     try {
         [System.Windows.Forms.Control].GetProperty('DoubleBuffered',
@@ -1054,22 +1060,26 @@ try {
     $status.Text      = 'Reading battery information...'
     $form.Controls.Add($status)
 
-    # System / battery info, two columns of five rows.
-    $colW = 262
-    $lblModel        = New-InfoLabel ('Model: '        + $script:SystemInfo.Model)        24 246 $colW
-    $lblManufacturer = New-InfoLabel ('Manufacturer: ' + $script:SystemInfo.Manufacturer) 24 270 $colW
-    $lblSerial       = New-InfoLabel ('Serial: '       + $script:SystemInfo.Serial)       24 294 $colW
-    $lblComputer     = New-InfoLabel ('Computer: '     + $script:SystemInfo.ComputerName) 24 318 $colW
-    $lblScreen       = New-InfoLabel ('Screen: '       + $script:SystemInfo.Screen)       24 342 $colW
-    $lblCpu          = New-InfoLabel ('CPU: '          + $script:SystemInfo.Cpu)          306 246 $colW
-    $lblRam          = New-InfoLabel ('RAM: '          + $script:SystemInfo.Ram)          306 270 $colW
-    $lblGpu          = New-InfoLabel ('GPU: '          + $script:SystemInfo.Gpu)          306 294 $colW
-    $lblBattery      = New-InfoLabel 'Battery: --'  306 318 $colW
-    $lblHealth       = New-InfoLabel 'Health: --'   306 342 $colW
-    # Storage spans the full width - drive names plus free/total can be long.
-    $lblDisk         = New-InfoLabel ('Storage: ' + $script:SystemInfo.Disk) 24 366 ($form.ClientSize.Width - 48)
+    # Identity fields stacked to the left of the battery graphic.
+    $idX = 20; $idW = 222
+    $lblModel        = New-InfoLabel ('Model: '        + $script:SystemInfo.Model)        $idX 44  $idW
+    $lblManufacturer = New-InfoLabel ('Manufacturer: ' + $script:SystemInfo.Manufacturer) $idX 70  $idW
+    $lblSerial       = New-InfoLabel ('Serial: '       + $script:SystemInfo.Serial)       $idX 96  $idW
+    $lblComputer     = New-InfoLabel ('Computer: '     + $script:SystemInfo.ComputerName) $idX 122 $idW
+    $lblScreen       = New-InfoLabel ('Screen: '       + $script:SystemInfo.Screen)       $idX 148 $idW
+
+    # Specs stacked full-width under the battery, in the requested order:
+    # CPU, RAM, hard drive, then GPU / battery / health.
+    $specX = 24; $specW = $form.ClientSize.Width - 48
+    $lblCpu          = New-InfoLabel ('CPU: '     + $script:SystemInfo.Cpu)  $specX 244 $specW
+    $lblRam          = New-InfoLabel ('RAM: '     + $script:SystemInfo.Ram)  $specX 270 $specW
+    $lblDisk         = New-InfoLabel ('Storage: ' + $script:SystemInfo.Disk) $specX 296 $specW
+    $lblGpu          = New-InfoLabel ('GPU: '     + $script:SystemInfo.Gpu)  $specX 322 $specW
+    $lblBattery      = New-InfoLabel 'Battery: --'                           $specX 348 $specW
+    $lblHealth       = New-InfoLabel 'Health: --'                            $specX 374 $specW
+
     foreach ($lbl in @($lblModel, $lblManufacturer, $lblSerial, $lblComputer, $lblScreen,
-                       $lblCpu, $lblRam, $lblGpu, $lblBattery, $lblHealth, $lblDisk)) {
+                       $lblCpu, $lblRam, $lblDisk, $lblGpu, $lblBattery, $lblHealth)) {
         $form.Controls.Add($lbl)
     }
     # Long values (CPU/GPU names, multi-monitor lists) get ellipsised by the
@@ -1155,7 +1165,8 @@ try {
         $ui.Ram.Text          = 'RAM: '          + $script:SystemInfo.Ram
         $ui.Gpu.Text          = 'GPU: '          + $script:SystemInfo.Gpu
         $ui.Disk.Text         = 'Storage: '      + $script:SystemInfo.Disk
-        foreach ($lbl in @($ui.Model, $ui.Cpu, $ui.Ram, $ui.Gpu, $ui.Screen, $ui.Disk)) {
+        foreach ($lbl in @($ui.Model, $ui.Manufacturer, $ui.Serial, $ui.Screen,
+                           $ui.Cpu, $ui.Ram, $ui.Gpu, $ui.Disk)) {
             $ui.Tips.SetToolTip($lbl, $lbl.Text)
         }
     } catch { }
